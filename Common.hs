@@ -39,6 +39,8 @@ redisOrFail x = join $ either (fail . show) return <$> x
 redisOrFail_ :: Redis.Redis (Either Redis.Reply a) -> Redis.Redis ()
 redisOrFail_ x = join $ either (fail . show) (const $ return ()) <$> x
 
+data HubMode = ModeSubscribe | ModeUnsubscribe deriving (Show, Enum, Bounded)
+
 data Ping = Ping Int Text Text deriving (Show)
 
 instance Aeson.FromJSON Ping where

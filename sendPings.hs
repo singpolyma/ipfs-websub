@@ -16,8 +16,7 @@ import qualified UnexceptionalIO as UIO
 import qualified Crypto.MAC.HMAC as HMAC
 import qualified Crypto.Hash as HMAC
 import qualified Crypto.Hash.Algorithms as HMAC
-import Database.Redis as Redis
-import qualified RedisURL
+import qualified Database.Redis as Redis
 
 import Common
 
