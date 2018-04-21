@@ -4,7 +4,6 @@ import Prelude ()
 import BasicPrelude
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (atomically, retry, TVar, newTVarIO, readTVar, modifyTVar')
-import System.Environment (lookupEnv)
 import Control.Error (hush, justZ)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Network.URI (parseURI)
@@ -14,7 +13,6 @@ import qualified Data.ByteString.Lazy as LZ
 import qualified Data.Aeson as Aeson
 import qualified UnexceptionalIO as UIO
 import Database.Redis as Redis
-import qualified RedisURL
 
 import Common
 
@@ -46,12 +44,6 @@ getRequest urlString =
 getJSON :: (MonadIO m, Aeson.FromJSON a) => String -> m (Maybe a)
 getJSON url = liftIO $ fmap (join . hush) $ UIO.syncIO $ fmap Aeson.decode $
 	getResponseBody =<< simpleHTTP (getRequest url)
-
-redisFromEnvOrDefault :: IO Redis.ConnectInfo
-redisFromEnvOrDefault =
-	join $ either fail return <$>
-	maybe (Right Redis.defaultConnectInfo) RedisURL.parseConnectInfo <$>
-	lookupEnv "REDIS_URL"
 
 resolveOne :: TVar Int -> ByteString -> ByteString -> Redis.Redis ()
 resolveOne limit ipns lastPath = do
