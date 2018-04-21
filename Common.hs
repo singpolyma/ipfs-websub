@@ -17,6 +17,9 @@ s = fromString
 inf :: Double
 inf = 1/0
 
+(.:) :: (c -> d) -> (a -> b -> c) -> (a -> b -> d)
+(.:) = (.) . (.)
+
 logPrint :: (Show a, MonadIO m) => TQueue Text -> String -> a -> m ()
 logPrint logthese tag x = liftIO $ do
 	time <- getCurrentTime
@@ -36,7 +39,7 @@ redisOrFail x = join $ either (fail . show) return <$> x
 redisOrFail_ :: Redis.Redis (Either Redis.Reply a) -> Redis.Redis ()
 redisOrFail_ x = join $ either (fail . show) (const $ return ()) <$> x
 
-data Ping = Ping Text Text Int deriving (Show)
+data Ping = Ping Int Text Text deriving (Show)
 
 instance Aeson.FromJSON Ping where
 	parseJSON = Aeson.withObject "Ping" $ \o ->

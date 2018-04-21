@@ -62,7 +62,7 @@ resolveOne limit ipns lastPath = do
 				mcallbacks <- Redis.zrangebyscore fullIPNS (-inf) inf
 				forM_ mcallbacks $
 					Redis.lpush (encodeUtf8 $ s"pings_to_send") . map
-						(LZ.toStrict . Aeson.encode . Ping fullIPFS . decodeUtf8)
+						(LZ.toStrict . Aeson.encode . Ping 0 fullIPFS . decodeUtf8)
 			void $ Redis.hset (encodeUtf8 $ s"last_resolved_to") ipns (encodeUtf8 currentPath)
 	liftIO $ atomically $ modifyTVar' limit (subtract 1)
 	where

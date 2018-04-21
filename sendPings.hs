@@ -13,6 +13,9 @@ import qualified Network.Http.Client as HTTP
 import qualified Data.ByteString.Lazy as LZ
 import qualified Data.Aeson as Aeson
 import qualified UnexceptionalIO as UIO
+import qualified Crypto.MAC.HMAC as HMAC
+import qualified Crypto.Hash as HMAC
+import qualified Crypto.Hash.Algorithms as HMAC
 import Database.Redis as Redis
 import qualified RedisURL
 
@@ -21,23 +24,33 @@ import Common
 concurrencyLimit :: Int
 concurrencyLimit = 100
 
-firePing :: TQueue Text -> Streams.InputStream ByteString -> Text -> Text -> IO Bool
-firePing logthese instream ipfs callback | Just uri <- parseAbsoluteURI (textToString callback) =
+firePing :: TQueue Text -> Streams.InputStream ByteString -> Text -> Text -> Maybe ByteString -> IO Bool
+firePing logthese instream ipfs callback msecret | Just uri <- parseAbsoluteURI (textToString callback) = do
+	(stream, iomsig) <- case msecret of
+		Just secret -> second (fmap $ Just . HMAC.hmacGetDigest . HMAC.finalize) <$>
+			Streams.inputFoldM (return .: HMAC.update) (HMAC.initialize secret) instream
+		Nothing -> return (instream, return Nothing)
+	msig <- iomsig
+
 	HTTP.withConnection (HTTP.establishConnection $ encodeUtf8 callback) $ \conn -> do
 		let req = HTTP.buildRequest1 $ do
 			HTTP.http HTTP.POST (path uri)
 			HTTP.setHeader (encodeUtf8 $ s"Link")
 				(encodeUtf8 $ s"<https://websub.ipfs.singpolyma.net/>; rel=\"hub\", <dweb:" ++ ipfs ++ s">; rel=\"self\"")
-		HTTP.sendRequest conn req (HTTP.inputStreamBody instream)
+			case msig of
+				Just sig -> HTTP.setHeader (encodeUtf8 $ s"X-Hub-Signature")
+					(encodeUtf8 $ s"sha256=" ++ (tshow (sig :: HMAC.Digest HMAC.SHA256)))
+				Nothing -> return ()
+		HTTP.sendRequest conn req (HTTP.inputStreamBody stream)
 		HTTP.receiveResponse conn $ \response _ ->
 			case HTTP.getStatusCode response of
 				410 -> return True -- Subscription deleted
 				code | code >= 200 && code <= 299 -> return True
 				_ -> return False
-firePing logthese _ _ callback = logPrint logthese "firePing:nouri" callback >> return False
+firePing logthese _ _ callback _ = logPrint logthese "firePing:nouri" callback >> return False
 
-pingOne :: (MonadIO m) => TQueue Text -> Ping -> m Bool
-pingOne logthese ping@(Ping ipfs callback _) = liftIO $ do
+pingOne :: (MonadIO m) => TQueue Text -> Ping -> Maybe ByteString -> m Bool
+pingOne logthese ping@(Ping _ ipfs callback) secret = liftIO $ do
 	logPrint logthese "pingOne" ping
 	result <- liftIO $ syncIO $ HTTP.get (encodeUtf8 $ s"http://127.0.0.1:8080" ++ ipfs) $ \response instream -> do
 		logPrint logthese "pingOne:8080" (HTTP.getStatusCode response, ping)
@@ -45,9 +58,9 @@ pingOne logthese ping@(Ping ipfs callback _) = liftIO $ do
 			404 -> HTTP.get (encodeUtf8 $ s"http://127.0.0.1:5001/api/v0/dag/get?arg=" ++ ipfs) $ \dagresponse daginstream -> do
 				logPrint logthese "pingOne:5001" (HTTP.getStatusCode dagresponse, ping)
 				case HTTP.getStatusCode dagresponse of
-					200 -> firePing logthese daginstream ipfs callback
+					200 -> firePing logthese daginstream ipfs callback secret
 					_ -> return True
-			200 -> firePing logthese instream ipfs callback
+			200 -> firePing logthese instream ipfs callback secret
 			_ -> return False
 
 	case result of
@@ -74,7 +87,7 @@ waitForThreads limit =
 		when (concurrency > 0) retry
 
 recordFailure :: Ping -> Redis.RedisTx (Redis.Queued ())
-recordFailure ping@(Ping _ _ errors) =
+recordFailure ping@(Ping errors _ _) =
 	if delay < 60*60*24 then do
 		now <- realToFrac <$> liftIO getPOSIXTime
 		void <$> Redis.zadd (encodeUtf8 $ s"pings_to_retry") [(now + delay, LZ.toStrict $ Aeson.encode ping)]
@@ -89,17 +102,18 @@ whenTx False _ = return (return ())
 
 startPing :: (MonadIO m) => Redis.Connection -> TQueue Text -> TVar Int -> Bool -> ByteString -> m ()
 startPing redis logthese limit isretry rawping
-	| Just (ping@(Ping ipfs callback errors)) <- Aeson.decodeStrict rawping = liftIO $ do
+	| Just (ping@(Ping errors ipfs callback)) <- Aeson.decodeStrict rawping = liftIO $ do
 		logPrint logthese "startPing" ping
 		concurrencyUpOne limit
 		logPrint logthese "startPing::forking" ping
 		void $ forkIO $ Redis.runRedis redis $ do
 			logPrint logthese "startPing::forked" ping
-			success <- pingOne logthese ping
+			secret <- redisOrFail $ Redis.get (encodeUtf8 $ s"secret:" ++ callback)
+			success <- pingOne logthese ping secret
 
 			txresult <- Redis.multiExec $ do
 				whenTx isretry $ void <$> Redis.zrem (encodeUtf8 $ s"pings_to_retry") [rawping]
-				whenTx (not success) $ recordFailure (Ping ipfs callback (errors+1))
+				whenTx (not success) $ recordFailure (Ping (errors+1) ipfs callback)
 				whenTx (not isretry) $ void <$> Redis.lrem (encodeUtf8 $ s"pinging") 1 rawping
 
 			case txresult of
@@ -120,14 +134,14 @@ main = do
 	Redis.runRedis redis $ do
 		leftovers <- redisOrFail $ Redis.lrange (encodeUtf8 $ s"pinging") 0 (-1)
 		liftIO $ forM_ leftovers $ startPing redis logthese limit False
-		waitForThreads
+		waitForThreads limit
 
 		forever $ do
 			now <- realToFrac <$> liftIO getPOSIXTime
 			pings <- redisOrFail $ Redis.zrangebyscoreLimit (encodeUtf8 $ s"pings_to_retry") (-inf) now 0 100
 			when (not $ null pings) $ do
 				forM_ pings $ startPing redis logthese limit True
-				waitForThreads
+				waitForThreads limit
 
 			mping <- redisOrFail $
 				Redis.brpoplpush (encodeUtf8 $ s"pings_to_send") (encodeUtf8 $ s"pinging") (60*5)
