@@ -19,11 +19,6 @@ import Common
 concurrencyLimit :: Int
 concurrencyLimit = 1
 
-newtype IPFSPath = IPFSPath Text deriving (Show)
-
-instance Aeson.FromJSON IPFSPath where
-	parseJSON = Aeson.withObject "Path" $ \v -> IPFSPath <$> v Aeson..: (s"Path")
-
 data IPFSDiff = IPFSDiff [(Text, Bool)] deriving (Show)
 
 instance Aeson.FromJSON IPFSDiff where
