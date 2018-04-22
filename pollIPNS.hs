@@ -2,9 +2,9 @@ module Main (main) where
 
 import Prelude ()
 import BasicPrelude
-import Control.Concurrent (forkIO)
+import Control.Concurrent (throwTo, myThreadId)
 import Control.Concurrent.STM (atomically, retry, TVar, newTVarIO, readTVar, modifyTVar')
-import Control.Error (hush, justZ)
+import Control.Error (hush, justZ, exceptT, syncIO)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Network.URI (parseURI)
 import Network.BufferType (BufferType)
@@ -12,8 +12,9 @@ import Network.HTTP (simpleHTTP, mkRequest, Request, RequestMethod(GET), getResp
 import qualified Data.ByteString.Lazy as LZ
 import qualified Data.Aeson as Aeson
 import qualified UnexceptionalIO as UIO
-import Database.Redis as Redis
+import qualified Database.Redis as Redis
 
+import qualified LazyCBOR
 import Common
 
 concurrencyLimit :: Int
@@ -49,15 +50,17 @@ resolveOne limit ipns lastPath = do
 		if lastPathT == currentPath then return () else do
 			diff <- (getJSON $ "http://127.0.0.1:5001/api/v0/object/diff?arg=" ++
 				urlEncode (textToString lastPathT) ++
-				"&arg=" ++ urlEncode (textToString currentPath)) :: Redis (Maybe IPFSDiff)
+				"&arg=" ++ urlEncode (textToString currentPath)) :: Redis.Redis (Maybe IPFSDiff)
 			forM_ diff $ \(IPFSDiff diff) -> forM_ diff $ \(path, deleted) -> when (not deleted) $ do
 				let fullIPNS = ipns ++ (encodeUtf8 $ s"/" ++ path)
-				let fullIPFS = currentPath ++ s"/" ++ path
+				let fullIPNScbor = LazyCBOR.text $ decodeUtf8 fullIPNS
+				let fullIPFS = LazyCBOR.text $ currentPath ++ s"/" ++ path
 				void $ Redis.zremrangebyscore fullIPNS (-inf) now
 				mcallbacks <- Redis.zrangebyscore fullIPNS (-inf) inf
 				forM_ mcallbacks $
-					Redis.lpush (encodeUtf8 $ s"pings_to_send") . map
-						(LZ.toStrict . Aeson.encode . Ping 0 fullIPFS . decodeUtf8)
+					Redis.lpush (encodeUtf8 $ s"pings_to_send") . map (\callback ->
+						builderToStrict $ concat [fullIPFS, LazyCBOR.text $ decodeUtf8 callback, fullIPNScbor]
+					)
 			void $ Redis.hset (encodeUtf8 $ s"last_resolved_to") ipns (encodeUtf8 currentPath)
 	liftIO $ atomically $ modifyTVar' limit (subtract 1)
 	where
@@ -72,7 +75,9 @@ scanLastResolvedTo redis limit cursor = do
 			concurrency <- readTVar limit
 			when (concurrency >= concurrencyLimit) retry
 			modifyTVar' limit (+1)
-		void $ forkIO $ Redis.runRedis redis $ resolveOne limit ipns lastValue
+		mainThread <- myThreadId
+		safeFork $ exceptT (ignoreExceptions . throwTo mainThread) return $ syncIO $ Redis.runRedis redis $
+			resolveOne limit ipns lastValue
 	if next == Redis.cursor0 then return () else
 		scanLastResolvedTo redis limit next
 

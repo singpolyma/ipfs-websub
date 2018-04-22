@@ -63,7 +63,7 @@ subscribeOne callback callbackUri topic ipns lease msecret = do
 		redisOrFail_ $ Redis.zadd (encodeUtf8 ipns)
 			[(now + fromIntegral lease, encodeUtf8 callback)]
 		forM_ msecret $ \secret -> redisOrFail_ $
-			Redis.setOpts (encodeUtf8 (s"secret\0" ++ callback ++ s"\0") ++ ipnsRoot) secret
+			Redis.setOpts (builderToStrict $ concat $ map LazyCBOR.text [(s"secret"), callback, ipns]) secret
 				(Redis.SetOpts (Just $ fromIntegral lease) Nothing Nothing)
 		exists <- redisOrFail $ Redis.hexists (encodeUtf8 $ s"last_resolved_to") ipnsRoot
 		when (not exists) $ redisOrFail_ $

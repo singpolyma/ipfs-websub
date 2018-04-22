@@ -4,7 +4,6 @@ import Data.Word (Word16)
 import Control.Error (runExceptT, exceptT, throwE, (??), readZ, syncIO)
 import Network.URI (parseURIReference, parseAbsoluteURI, URI(..), URIAuth(..))
 import Data.Bool.HT (select)
-import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LZ
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai as Wai
@@ -57,7 +56,7 @@ app redis req = (>>=) $ exceptT (Wai.string HTTP.badRequest400 [] . (++"\n")) re
 
 	redisResult <- liftIO $ runExceptT $ syncIO $ Redis.runRedis redis $ redisOrFail_ $
 		Redis.lpush (encodeUtf8 $ s"to_verify") [
-			LZ.toStrict $ Builder.toLazyByteString $ concat $ [
+			builderToStrict $ concat $ [
 				LazyCBOR.word16 $ fromIntegral $ fromEnum mode,
 				LazyCBOR.text $ tshow topic,
 				LazyCBOR.text $ tshow callback,

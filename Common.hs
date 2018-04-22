@@ -11,6 +11,8 @@ import Control.Error (justZ, syncIO, exceptT, ExceptT)
 import UnexceptionalIO (Unexceptional, UIO, runUIO, liftUIO)
 import qualified UnexceptionalIO as UIO
 import qualified Data.Aeson as Aeson
+import qualified Data.ByteString.Lazy as LZ
+import qualified Data.ByteString.Builder as Builder
 import Database.Redis as Redis
 import qualified RedisURL
 
@@ -45,7 +47,7 @@ path u = case url of
 	""  -> encodeUtf8 $ s"/"
 	_   -> encodeUtf8 $ fromString url
 	where
-	url = concat [uriPath u, uriQuery u, uriFragment u]
+	url = concat [uriPath u, uriQuery u]
 
 redisOrFail :: Redis.Redis (Either Redis.Reply a) -> Redis.Redis a
 redisOrFail x = join $ either (fail . show) return <$> x
@@ -68,6 +70,9 @@ waitForThreads limit =
 
 safeFork :: (MonadIO m) => UIO () -> m ()
 safeFork = liftIO . void . forkIO . runUIO
+
+builderToStrict :: Builder.Builder -> ByteString
+builderToStrict = LZ.toStrict . Builder.toLazyByteString
 
 data HubMode = ModeSubscribe | ModeUnsubscribe deriving (Show, Enum, Bounded)
 
