@@ -2,22 +2,17 @@ import Prelude ()
 import BasicPrelude
 import Data.Word (Word16)
 import Control.Concurrent (throwTo, myThreadId)
-import Control.Concurrent.STM (atomically, retry, TVar, newTVarIO, readTVar, modifyTVar', TQueue, newTQueueIO, readTQueue, writeTQueue)
-import System.Environment (lookupEnv)
-import Control.Error (hush, justZ, exceptT, runExceptT, syncIO)
+import Control.Concurrent.STM (atomically, TVar, newTVarIO, modifyTVar', TQueue, newTQueueIO)
+import Control.Error (exceptT, runExceptT, syncIO)
 import Safe (toEnumMay)
 import Network.URI (URI(..), parseAbsoluteURI)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Network.URI (parseURI)
 import Crypto.Random (getRandomBytes)
 import qualified Data.Text as T
 import qualified System.IO.Streams as Streams
 import qualified Network.Http.Client as HTTP
 import qualified Network.HTTP.Types as HTTP
-import qualified Data.ByteString.Lazy as LZ
-import qualified Data.Aeson as Aeson
 import UnexceptionalIO (Unexceptional)
-import qualified UnexceptionalIO as UIO
 import qualified Database.Redis as Redis
 
 import qualified LazyCBOR
@@ -63,7 +58,7 @@ subscribeOne callback callbackUri topic ipns lease msecret = do
 		redisOrFail_ $ Redis.zadd (encodeUtf8 ipns)
 			[(now + fromIntegral lease, encodeUtf8 callback)]
 		forM_ msecret $ \secret -> redisOrFail_ $
-			Redis.setOpts (builderToStrict $ concat $ map LazyCBOR.text [(s"secret"), callback, ipns]) secret
+			Redis.setOpts (builderToStrict $ concat $ map LazyCBOR.text [s"secret", callback, ipns]) secret
 				(Redis.SetOpts (Just $ fromIntegral lease) Nothing Nothing)
 		exists <- redisOrFail $ Redis.hexists (encodeUtf8 $ s"last_resolved_to") ipnsRoot
 		when (not exists) $ redisOrFail_ $
@@ -76,7 +71,7 @@ subscribeOne callback callbackUri topic ipns lease msecret = do
 		(_:_:(x, _):_) -> x
 		_ -> mempty
 	denyCallback = encodeUtf8 $ tshow $ callbackUri {
-			uriQuery = textToString $ decodeUtf8 $ HTTP.renderQuery True (denyQuery)
+			uriQuery = textToString $ decodeUtf8 $ HTTP.renderQuery True denyQuery
 		}
 	denyQuery = HTTP.parseQuery (encodeUtf8 $ fromString $ uriQuery callbackUri) ++ [
 			(encodeUtf8 $ s"hub.mode", Just $ encodeUtf8 $ s"denied"),
@@ -118,9 +113,9 @@ startVerify redis logthese limit rawverify
 				ModeUnsubscribe -> unsubscribeOne callback callbackUri topic ipns
 
 			logPrint logthese "startVerify::done" (mode, topic, callback)
-			void <$> Redis.lrem (encodeUtf8 $ s"verifying") 1 rawverify
+			redisOrFail_ $ Redis.lrem (encodeUtf8 $ s"verifying") 1 rawverify
 			liftIO $ atomically $ modifyTVar' limit (subtract 1)
-	| otherwise = do
+	| otherwise =
 		logPrint logthese "startVerify::CBOR parse failed" rawverify
 
 main :: IO ()
