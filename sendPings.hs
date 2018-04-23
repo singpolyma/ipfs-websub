@@ -125,6 +125,7 @@ startPing redis logthese limit isretry rawping
 
 main :: IO ()
 main = do
+	putStrLn $ s"Starting..."
 	redis <- Redis.checkedConnect =<< redisFromEnvOrDefault
 	limit <- newTVarIO 0
 	logthese <- newTQueueIO
