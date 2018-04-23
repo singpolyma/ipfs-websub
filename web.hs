@@ -2,9 +2,9 @@ import Prelude ()
 import BasicPrelude
 import Data.Word (Word16)
 import Control.Error (runExceptT, exceptT, throwE, (??), readZ, syncIO)
-import Network.URI (parseURIReference, parseAbsoluteURI, URI(..), URIAuth(..))
+import Network.URI (parseURIReference, URI(..), URIAuth(..))
 import Data.Bool.HT (select)
-import qualified Data.ByteString.Lazy as LZ
+import qualified Data.Text as T
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Parse as Wai
@@ -12,7 +12,6 @@ import qualified Network.Wai.Middleware.RequestLogger as Wai
 import qualified Network.Wai.Util as Wai
 import qualified Network.HTTP.Types as HTTP
 import qualified Database.Redis as Redis
-import qualified Data.Text as T
 
 import qualified LazyCBOR
 import Common
@@ -61,7 +60,7 @@ app redis req = (>>=) $ exceptT (Wai.string HTTP.badRequest400 [] . (++"\n")) re
 				LazyCBOR.text $ tshow topic,
 				LazyCBOR.text $ tshow callback,
 				LazyCBOR.text ipns,
-				LazyCBOR.word16 $ lease
+				LazyCBOR.word16 lease
 			] ++ secret
 		]
 
