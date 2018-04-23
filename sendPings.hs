@@ -2,20 +2,14 @@ import Prelude ()
 import BasicPrelude
 import Data.Word (Word16)
 import Control.Concurrent (forkIO)
-import Control.Concurrent.STM (atomically, retry, TVar, newTVarIO, readTVar, modifyTVar', TQueue, newTQueueIO, readTQueue, writeTQueue)
-import System.Environment (lookupEnv)
+import Control.Concurrent.STM (atomically, TVar, newTVarIO, modifyTVar', TQueue, newTQueueIO)
 import UnexceptionalIO (syncIO)
-import Control.Error (hush, justZ)
-import Network.URI (URI(..), parseAbsoluteURI)
+import Network.URI (parseAbsoluteURI)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Network.URI (parseURI)
 import qualified System.IO.Streams as Streams
 import qualified Network.Http.Client as HTTP
-import qualified Data.ByteString.Lazy as LZ
-import qualified UnexceptionalIO as UIO
 import qualified Crypto.MAC.HMAC as HMAC
 import qualified Crypto.Hash as HMAC
-import qualified Crypto.Hash.Algorithms as HMAC
 import qualified Database.Redis as Redis
 
 import qualified LazyCBOR
@@ -25,7 +19,7 @@ concurrencyLimit :: Int
 concurrencyLimit = 100
 
 firePing :: TQueue Text -> Streams.InputStream ByteString -> Text -> Text -> Maybe ByteString -> IO Bool
-firePing logthese instream ipfs callback msecret | Just uri <- parseAbsoluteURI (textToString callback) = do
+firePing _ instream ipfs callback msecret | Just uri <- parseAbsoluteURI (textToString callback) = do
 	(stream, iomsig) <- case msecret of
 		Just secret -> second (fmap $ Just . HMAC.hmacGetDigest . HMAC.finalize) <$>
 			Streams.inputFoldM (return .: HMAC.update) (HMAC.initialize secret) instream
@@ -34,12 +28,12 @@ firePing logthese instream ipfs callback msecret | Just uri <- parseAbsoluteURI 
 
 	HTTP.withConnection (HTTP.establishConnection $ encodeUtf8 callback) $ \conn -> do
 		let req = HTTP.buildRequest1 $ do
-			HTTP.http HTTP.POST (path uri)
+			HTTP.http HTTP.POST (uriFullPath uri)
 			HTTP.setHeader (encodeUtf8 $ s"Link")
 				(encodeUtf8 $ s"<https://websub.ipfs.singpolyma.net/>; rel=\"hub\", <dweb:" ++ ipfs ++ s">; rel=\"self\"")
 			case msig of
 				Just sig -> HTTP.setHeader (encodeUtf8 $ s"X-Hub-Signature")
-					(encodeUtf8 $ s"sha256=" ++ (tshow (sig :: HMAC.Digest HMAC.SHA256)))
+					(encodeUtf8 $ s"sha256=" ++ tshow (sig :: HMAC.Digest HMAC.SHA256))
 				Nothing -> return ()
 		HTTP.sendRequest conn req (HTTP.inputStreamBody stream)
 		HTTP.receiveResponse conn $ \response _ ->
@@ -64,7 +58,7 @@ pingOne logthese ipfs callback secret = liftIO $ do
 			_ -> return False
 
 	case result of
-		Left e -> logPrint logthese "pingOne:fatal" (result, ipfs, callback) >> return False
+		Left _ -> logPrint logthese "pingOne:fatal" (result, ipfs, callback) >> return False
 		Right False -> logPrint logthese "pingOne:failed" (result, ipfs, callback) >> return False
 		Right True -> logPrint logthese "pingOne:success" (ipfs, callback) >> return True
 
@@ -106,13 +100,14 @@ startPing redis logthese limit isretry rawping
 		logPrint logthese "startPing::forking" (ipfs, callback)
 		void $ forkIO $ Redis.runRedis redis $ do
 			logPrint logthese "startPing::forked" (ipfs, callback)
-			secret <- redisOrFail $ Redis.get $ builderToStrict $ concat $ map LazyCBOR.text [(s"secret"), callback, ipns]
+			secret <- redisOrFail $ Redis.get $ builderToStrict $ concat $ map LazyCBOR.text [s"secret", callback, ipns]
 			success <- pingOne logthese ipfs callback secret
 
 			txresult <- Redis.multiExec $ do
-				whenTx isretry $ void <$> Redis.zrem (encodeUtf8 $ s"pings_to_retry") [rawping]
-				whenTx (not success) $ recordFailure ipfs callback ipns (errorCount+1)
-				whenTx (not isretry) $ void <$> Redis.lrem (encodeUtf8 $ s"pinging") 1 rawping
+				x <- whenTx isretry $ void <$> Redis.zrem (encodeUtf8 $ s"pings_to_retry") [rawping]
+				y <- whenTx (not success) $ recordFailure ipfs callback ipns (errorCount+1)
+				z <- whenTx (not isretry) $ void <$> Redis.lrem (encodeUtf8 $ s"pinging") 1 rawping
+				return (x >> y >> z)
 
 			case txresult of
 				Redis.TxSuccess () -> return ()
@@ -120,7 +115,7 @@ startPing redis logthese limit isretry rawping
 				Redis.TxError e -> fail $ "startPing :: " ++ e
 
 			liftIO $ atomically $ modifyTVar' limit (subtract 1)
-	| otherwise = do
+	| otherwise =
 		logPrint logthese "startPing::CBOR parse failed" rawping
 
 main :: IO ()
