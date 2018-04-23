@@ -6,14 +6,14 @@ import Control.Concurrent (forkIO)
 import System.Environment (lookupEnv)
 import Data.Time (getCurrentTime)
 import Control.Concurrent.STM (atomically, TQueue, TVar, readTVar, modifyTVar', retry, readTQueue, writeTQueue)
-import Network.URI (URI(..), parseAbsoluteURI)
-import Control.Error (justZ, syncIO, exceptT, ExceptT)
+import Network.URI (URI(..))
+import Control.Error (syncIO, exceptT, ExceptT)
 import UnexceptionalIO (Unexceptional, UIO, runUIO, liftUIO)
 import qualified UnexceptionalIO as UIO
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LZ
 import qualified Data.ByteString.Builder as Builder
-import Database.Redis as Redis
+import qualified Database.Redis as Redis
 import qualified RedisURL
 
 s :: (IsString a) => String -> a
@@ -39,11 +39,11 @@ logger logthese = forever $ printExceptions $ syncIO $ do
 printExceptions :: (Show e, Unexceptional m, Monad m) => ExceptT e m () -> m ()
 printExceptions = exceptT (ignoreExceptions . print) return
 
-ignoreExceptions :: (Unexceptional m, Monad m) => IO () -> m ()
+ignoreExceptions :: (Unexceptional m) => IO () -> m ()
 ignoreExceptions = liftUIO . void . UIO.fromIO
 
-path :: URI -> ByteString
-path u = case url of
+uriFullPath :: URI -> ByteString
+uriFullPath u = case url of
 	""  -> encodeUtf8 $ s"/"
 	_   -> encodeUtf8 $ fromString url
 	where
@@ -79,7 +79,7 @@ data HubMode = ModeSubscribe | ModeUnsubscribe deriving (Show, Enum, Bounded)
 newtype IPFSPath = IPFSPath Text deriving (Show)
 
 instance Aeson.FromJSON IPFSPath where
-	parseJSON = Aeson.withObject "Path" $ \v -> IPFSPath <$> v Aeson..: (s"Path")
+	parseJSON = Aeson.withObject "Path" $ \v -> IPFSPath <$> v Aeson..: s"Path"
 
 redisFromEnvOrDefault :: IO Redis.ConnectInfo
 redisFromEnvOrDefault =

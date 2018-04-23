@@ -63,6 +63,6 @@ parseConnectInfo url = do
             else h
         , connectPort = maybe (connectPort defaultConnectInfo)
             (PortNumber . fromIntegral) $ port uriAuth
-        , connectAuth = fmap C8.pack $ password uriAuth
+        , connectAuth = C8.pack <$> password uriAuth
         , connectDatabase = db
         }

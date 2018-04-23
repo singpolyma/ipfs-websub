@@ -32,7 +32,7 @@ getCborChunk bytes
 	(str, afterstr) = B.splitAt (fromIntegral len) afterlen
 	len
 		| B.length lenbytes == 2 =
-			(fromIntegral (B.index lenbytes 0) `shiftL` 8) .|. (fromIntegral $ B.index lenbytes 1)
+			(fromIntegral (B.index lenbytes 0) `shiftL` 8) .|. fromIntegral (B.index lenbytes 1)
 		| otherwise = 0
 	(lenbytes, afterlen) = B.splitAt 2 aftermark
 	(mark, aftermark) = fromMaybe (0, mempty) $ B.uncons bytes
