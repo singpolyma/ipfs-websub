@@ -76,19 +76,6 @@ builderToStrict = LZ.toStrict . Builder.toLazyByteString
 
 data HubMode = ModeSubscribe | ModeUnsubscribe deriving (Show, Enum, Bounded)
 
-data Ping = Ping Int Text Text deriving (Show)
-
-instance Aeson.FromJSON Ping where
-	parseJSON = Aeson.withObject "Ping" $ \o ->
-		Ping <$> o Aeson..: (s"ipfs") <*> o Aeson..: (s"callback") <*> o Aeson..: (s"errors")
-
-instance Aeson.ToJSON Ping where
-	toJSON (Ping ipfs callback errors) =
-		Aeson.object [s"ipfs" Aeson..= ipfs, s"callback" Aeson..= callback, s"errors" Aeson..= errors]
-
-	toEncoding (Ping ipfs callback errors) =
-		Aeson.pairs (s"ipfs" Aeson..= ipfs ++ s"callback" Aeson..= callback ++ s"errors" Aeson..= errors)
-
 newtype IPFSPath = IPFSPath Text deriving (Show)
 
 instance Aeson.FromJSON IPFSPath where

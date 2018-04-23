@@ -1,5 +1,6 @@
 import Prelude ()
 import BasicPrelude
+import Data.Word (Word16)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (atomically, retry, TVar, newTVarIO, readTVar, modifyTVar', TQueue, newTQueueIO, readTQueue, writeTQueue)
 import System.Environment (lookupEnv)
@@ -11,13 +12,13 @@ import Network.URI (parseURI)
 import qualified System.IO.Streams as Streams
 import qualified Network.Http.Client as HTTP
 import qualified Data.ByteString.Lazy as LZ
-import qualified Data.Aeson as Aeson
 import qualified UnexceptionalIO as UIO
 import qualified Crypto.MAC.HMAC as HMAC
 import qualified Crypto.Hash as HMAC
 import qualified Crypto.Hash.Algorithms as HMAC
 import qualified Database.Redis as Redis
 
+import qualified LazyCBOR
 import Common
 
 concurrencyLimit :: Int
@@ -48,14 +49,14 @@ firePing logthese instream ipfs callback msecret | Just uri <- parseAbsoluteURI 
 				_ -> return False
 firePing logthese _ _ callback _ = logPrint logthese "firePing:nouri" callback >> return False
 
-pingOne :: (MonadIO m) => TQueue Text -> Ping -> Maybe ByteString -> m Bool
-pingOne logthese ping@(Ping _ ipfs callback) secret = liftIO $ do
-	logPrint logthese "pingOne" ping
+pingOne :: (MonadIO m) => TQueue Text -> Text -> Text -> Maybe ByteString -> m Bool
+pingOne logthese ipfs callback secret = liftIO $ do
+	logPrint logthese "pingOne" (ipfs, callback)
 	result <- liftIO $ syncIO $ HTTP.get (encodeUtf8 $ s"http://127.0.0.1:8080" ++ ipfs) $ \response instream -> do
-		logPrint logthese "pingOne:8080" (HTTP.getStatusCode response, ping)
+		logPrint logthese "pingOne:8080" (HTTP.getStatusCode response, ipfs, callback)
 		case HTTP.getStatusCode response of
 			404 -> HTTP.get (encodeUtf8 $ s"http://127.0.0.1:5001/api/v0/dag/get?arg=" ++ ipfs) $ \dagresponse daginstream -> do
-				logPrint logthese "pingOne:5001" (HTTP.getStatusCode dagresponse, ping)
+				logPrint logthese "pingOne:5001" (HTTP.getStatusCode dagresponse, ipfs, callback)
 				case HTTP.getStatusCode dagresponse of
 					200 -> firePing logthese daginstream ipfs callback secret
 					_ -> return True
@@ -63,66 +64,64 @@ pingOne logthese ping@(Ping _ ipfs callback) secret = liftIO $ do
 			_ -> return False
 
 	case result of
-		Left e -> logPrint logthese "pingOne:fatal" (result, ping) >> return False
-		Right False -> logPrint logthese "pingOne:failed" (result, ping) >> return False
-		Right True -> logPrint logthese "pingOne:success" ping >> return True
+		Left e -> logPrint logthese "pingOne:fatal" (result, ipfs, callback) >> return False
+		Right False -> logPrint logthese "pingOne:failed" (result, ipfs, callback) >> return False
+		Right True -> logPrint logthese "pingOne:success" (ipfs, callback) >> return True
 
-logger :: TQueue Text -> IO ()
-logger logthese = forever $ do
-	logthis <- atomically $ readTQueue logthese
-	putStrLn logthis
-
-concurrencyUpOne :: (MonadIO m) => TVar Int -> m ()
-concurrencyUpOne limit =
-	liftIO $ atomically $ do
-		concurrency <- readTVar limit
-		when (concurrency >= concurrencyLimit) retry
-		modifyTVar' limit (+1)
-
-waitForThreads :: (MonadIO m) => TVar Int -> m ()
-waitForThreads limit =
-	liftIO $ atomically $ do
-		concurrency <- readTVar limit
-		when (concurrency > 0) retry
-
-recordFailure :: Ping -> Redis.RedisTx (Redis.Queued ())
-recordFailure ping@(Ping errors _ _) =
+recordFailure :: Text -> Text -> Text -> Word16 -> Redis.RedisTx (Redis.Queued ())
+recordFailure ipfs callback ipns errorCount =
 	if delay < 60*60*24 then do
 		now <- realToFrac <$> liftIO getPOSIXTime
-		void <$> Redis.zadd (encodeUtf8 $ s"pings_to_retry") [(now + delay, LZ.toStrict $ Aeson.encode ping)]
+		void <$> Redis.zadd (encodeUtf8 $ s"pings_to_retry") [(now + delay, encoded)]
 	else
-		void <$> Redis.lpush (encodeUtf8 $ s"fatal") [LZ.toStrict $ Aeson.encode ping]
+		void <$> Redis.lpush (encodeUtf8 $ s"fatal") [encoded]
 	where
-	delay = (60 * 5) * (realToFrac errors ** 2)
+	encoded = builderToStrict $ concat [
+			LazyCBOR.text ipfs,
+			LazyCBOR.text callback,
+			LazyCBOR.text ipns,
+			LazyCBOR.word16 errorCount
+		]
+	delay = (60 * 5) * (realToFrac errorCount ** 2)
 
 whenTx :: Bool -> Redis.RedisTx (Redis.Queued ()) -> Redis.RedisTx (Redis.Queued ())
 whenTx True tx = tx
 whenTx False _ = return (return ())
 
+getErrorCount :: (Integral i) => [LazyCBOR.Chunk] -> i
+getErrorCount (LazyCBOR.Word16Chunk count : _) = fromIntegral count
+getErrorCount _ = 0
+
 startPing :: (MonadIO m) => Redis.Connection -> TQueue Text -> TVar Int -> Bool -> ByteString -> m ()
 startPing redis logthese limit isretry rawping
-	| Just (ping@(Ping errors ipfs callback)) <- Aeson.decodeStrict rawping = liftIO $ do
-		logPrint logthese "startPing" ping
-		concurrencyUpOne limit
-		logPrint logthese "startPing::forking" ping
+	| (
+	  LazyCBOR.TextChunk ipfs     :
+	  LazyCBOR.TextChunk callback :
+	  LazyCBOR.TextChunk ipns     :
+	  merrorCount
+	  ) <- LazyCBOR.parse rawping = liftIO $ do
+		let errorCount = getErrorCount merrorCount
+		logPrint logthese "startPing" (ipfs, callback)
+		concurrencyUpOne concurrencyLimit limit
+		logPrint logthese "startPing::forking" (ipfs, callback)
 		void $ forkIO $ Redis.runRedis redis $ do
-			logPrint logthese "startPing::forked" ping
-			secret <- redisOrFail $ Redis.get (encodeUtf8 $ s"secret:" ++ callback)
-			success <- pingOne logthese ping secret
+			logPrint logthese "startPing::forked" (ipfs, callback)
+			secret <- redisOrFail $ Redis.get $ builderToStrict $ concat $ map LazyCBOR.text [(s"secret"), callback, ipns]
+			success <- pingOne logthese ipfs callback secret
 
 			txresult <- Redis.multiExec $ do
 				whenTx isretry $ void <$> Redis.zrem (encodeUtf8 $ s"pings_to_retry") [rawping]
-				whenTx (not success) $ recordFailure (Ping (errors+1) ipfs callback)
+				whenTx (not success) $ recordFailure ipfs callback ipns (errorCount+1)
 				whenTx (not isretry) $ void <$> Redis.lrem (encodeUtf8 $ s"pinging") 1 rawping
 
 			case txresult of
 				Redis.TxSuccess () -> return ()
-				TxAborted -> fail "startPing transaction aborted"
-				TxError e -> fail $ "startPing :: " ++ e
+				Redis.TxAborted -> fail "startPing transaction aborted"
+				Redis.TxError e -> fail $ "startPing :: " ++ e
 
 			liftIO $ atomically $ modifyTVar' limit (subtract 1)
 	| otherwise = do
-		logPrint logthese "startPing::json parse failed" rawping
+		logPrint logthese "startPing::CBOR parse failed" rawping
 
 main :: IO ()
 main = do
