@@ -4,12 +4,11 @@ import Prelude ()
 import BasicPrelude
 import Control.Concurrent (throwTo, myThreadId)
 import Control.Concurrent.STM (atomically, retry, TVar, newTVarIO, readTVar, modifyTVar')
-import Control.Error (hush, justZ, exceptT, syncIO)
+import Control.Error (hush, exceptT, syncIO)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Network.URI (parseURI)
 import Network.BufferType (BufferType)
 import Network.HTTP (simpleHTTP, mkRequest, Request, RequestMethod(GET), getResponseBody, urlEncode)
-import qualified Data.ByteString.Lazy as LZ
 import qualified Data.Aeson as Aeson
 import qualified UnexceptionalIO as UIO
 import qualified Database.Redis as Redis
@@ -25,10 +24,10 @@ data IPFSDiff = IPFSDiff [(Text, Bool)] deriving (Show)
 instance Aeson.FromJSON IPFSDiff where
 	parseJSON v = do
 		o <- Aeson.parseJSON v
-		changes <- o Aeson..: (s"Changes")
+		changes <- o Aeson..: s"Changes"
 		fmap IPFSDiff $ forM changes $ \item -> do
-			path <- item Aeson..: (s"Path")
-			after <- item Aeson..: (s"After")
+			path <- item Aeson..: s"Path"
+			after <- item Aeson..: s"After"
 			return (path, after == Aeson.Null)
 
 getRequest :: (BufferType a) => String -> Request a
@@ -48,11 +47,11 @@ resolveOne limit ipns lastPath = do
 	forM_ resolvedIPNS $ \(IPFSPath currentPath) ->
 		let lastPathT = decodeUtf8 lastPath in
 		if lastPathT == currentPath then return () else do
-			diff <- (getJSON $ "http://127.0.0.1:5001/api/v0/object/diff?arg=" ++
+			diffr <- (getJSON $ "http://127.0.0.1:5001/api/v0/object/diff?arg=" ++
 				urlEncode (textToString lastPathT) ++
 				"&arg=" ++ urlEncode (textToString currentPath)) :: Redis.Redis (Maybe IPFSDiff)
-			forM_ diff $ \(IPFSDiff diff) -> forM_ diff $ \(path, deleted) -> when (not deleted) $ do
-				let fullIPNS = ipns ++ (encodeUtf8 $ s"/" ++ path)
+			forM_ diffr $ \(IPFSDiff diff) -> forM_ diff $ \(path, deleted) -> when (not deleted) $ do
+				let fullIPNS = ipns ++ encodeUtf8 (s"/" ++ path)
 				let fullIPNScbor = LazyCBOR.text $ decodeUtf8 fullIPNS
 				let fullIPFS = LazyCBOR.text $ currentPath ++ s"/" ++ path
 				void $ Redis.zremrangebyscore fullIPNS (-inf) now
