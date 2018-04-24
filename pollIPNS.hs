@@ -8,8 +8,9 @@ import Control.Error (hush, exceptT, syncIO)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Network.URI (parseURI)
 import Network.BufferType (BufferType)
-import Network.HTTP (simpleHTTP, mkRequest, Request, RequestMethod(GET), getResponseBody, urlEncode)
 import qualified Data.Aeson as Aeson
+import qualified Network.Http.Client as HTTP
+import qualified Network.HTTP.Types as HTTP
 import qualified UnexceptionalIO as UIO
 import qualified Database.Redis as Redis
 
@@ -30,26 +31,20 @@ instance Aeson.FromJSON IPFSDiff where
 			after <- item Aeson..: s"After"
 			return (path, after == Aeson.Null)
 
-getRequest :: (BufferType a) => String -> Request a
-getRequest urlString =
-	case parseURI urlString of
-		Nothing -> error ("getRequest: Not a valid URL - " ++ urlString)
-		Just u  -> mkRequest GET u
-
-getJSON :: (MonadIO m, Aeson.FromJSON a) => String -> m (Maybe a)
-getJSON url = liftIO $ fmap (join . hush) $ UIO.syncIO $ fmap Aeson.decode $
-	getResponseBody =<< simpleHTTP (getRequest url)
+urlEncode :: Text -> ByteString
+urlEncode = HTTP.urlEncode False . encodeUtf8
 
 resolveOne :: TVar Int -> ByteString -> ByteString -> Redis.Redis ()
 resolveOne limit ipns lastPath = do
 	now <- realToFrac <$> liftIO getPOSIXTime
-	resolvedIPNS <- getJSON ("http://127.0.0.1:5001/api/v0/name/resolve?r&arg=" ++ urlEncode ipnsS)
+	resolvedIPNS <- liftIO $ fmap hush $ UIO.syncIO $ HTTP.get (encodeUtf8 (s"http://127.0.0.1:5001/api/v0/name/resolve?r&arg=") ++ HTTP.urlEncode False ipns) HTTP.jsonHandler
 	forM_ resolvedIPNS $ \(IPFSPath currentPath) ->
 		let lastPathT = decodeUtf8 lastPath in
 		if lastPathT == currentPath then return () else do
-			diffr <- (getJSON $ "http://127.0.0.1:5001/api/v0/object/diff?arg=" ++
-				urlEncode (textToString lastPathT) ++
-				"&arg=" ++ urlEncode (textToString currentPath)) :: Redis.Redis (Maybe IPFSDiff)
+			diffr <- liftIO $ fmap hush $ UIO.syncIO $ HTTP.get (
+					encodeUtf8 (s"http://127.0.0.1:5001/api/v0/object/diff?arg=") ++ urlEncode lastPathT ++
+					encodeUtf8 (s"&arg=") ++ urlEncode currentPath
+				) HTTP.jsonHandler
 			forM_ diffr $ \(IPFSDiff diff) -> forM_ diff $ \(path, deleted) -> when (not deleted) $ do
 				let fullIPNS = ipns ++ encodeUtf8 (s"/" ++ path)
 				let fullIPNScbor = LazyCBOR.text $ decodeUtf8 fullIPNS
