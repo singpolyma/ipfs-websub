@@ -66,7 +66,7 @@ app redis req = (>>=) $ exceptT (Wai.string HTTP.badRequest400 [] . (++"\n")) re
 
 	case redisResult of
 		Left _ -> Wai.string HTTP.internalServerError500 [] "DB connection issue\n"
-		Right () -> Wai.string HTTP.ok200 [] "Request enqueued\n"
+		Right () -> Wai.string HTTP.accepted202 [] "Request enqueued\n"
 
 main :: IO ()
 main = do
