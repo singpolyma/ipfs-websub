@@ -1,7 +1,6 @@
 import Prelude ()
 import BasicPrelude
 import Data.Word (Word16)
-import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (atomically, TVar, newTVarIO, modifyTVar', TQueue, newTQueueIO)
 import UnexceptionalIO (syncIO)
 import Network.URI (parseAbsoluteURI)
@@ -98,7 +97,7 @@ startPing redis logthese limit isretry rawping
 		logPrint logthese "startPing" (ipfs, callback)
 		concurrencyUpOne concurrencyLimit limit
 		logPrint logthese "startPing::forking" (ipfs, callback)
-		void $ forkIO $ Redis.runRedis redis $ do
+		linkFork $ Redis.runRedis redis $ do
 			logPrint logthese "startPing::forked" (ipfs, callback)
 			secret <- redisOrFail $ Redis.get $ builderToStrict $ concat $ map LazyCBOR.text [s"secret", callback, ipns]
 			success <- pingOne logthese ipfs callback secret
@@ -124,7 +123,7 @@ main = do
 	redis <- Redis.checkedConnect =<< redisFromEnvOrDefault
 	limit <- newTVarIO 0
 	logthese <- newTQueueIO
-	liftIO $ void $ forkIO $ logger logthese
+	linkFork $ logger logthese
 	Redis.runRedis redis $ do
 		leftovers <- redisOrFail $ Redis.lrange (encodeUtf8 $ s"pinging") 0 (-1)
 		liftIO $ forM_ leftovers $ startPing redis logthese limit False
