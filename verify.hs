@@ -3,7 +3,7 @@ import BasicPrelude
 import Data.Word (Word16)
 import Control.Concurrent (throwTo, myThreadId)
 import Control.Concurrent.STM (atomically, TVar, newTVarIO, modifyTVar', TQueue, newTQueueIO)
-import Control.Error (exceptT, runExceptT, syncIO)
+import Control.Error (exceptT, runExceptT, syncIO, fmapLT)
 import Safe (toEnumMay)
 import Network.URI (URI(..), parseAbsoluteURI)
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -47,6 +47,7 @@ verifyWithSubscriber callbackUri mode topic lease = exceptT (const $ return Fals
 subscribeOne :: Text -> URI -> Text -> Text -> Word16 -> Maybe ByteString -> Redis.Redis ()
 subscribeOne callback callbackUri topic ipns lease msecret = do
 	result <- liftIO $ runExceptT $ syncIO $ HTTP.get ipnsResolve HTTP.jsonHandler
+	result <- liftIO $ fmap join $ runExceptT $ fmapLT show $ syncIO $ HTTP.get ipnsResolve jsonHandlerSafe
 	mpath <- liftIO $ case result of
 		Left _ -> exceptT (const $ return Nothing) (const $ return Nothing) $
 			syncIO $ HTTP.get denyCallback (const $ const $ return ())

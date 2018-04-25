@@ -11,6 +11,9 @@ import Control.Error (syncIO, exceptT, ExceptT)
 import UnexceptionalIO (Unexceptional, UIO, runUIO, liftUIO)
 import qualified UnexceptionalIO as UIO
 import qualified Data.Aeson as Aeson
+import qualified System.IO.Streams as Streams
+import qualified System.IO.Streams.Attoparsec as Streams
+import qualified Network.Http.Client as HTTP
 import qualified Data.ByteString.Lazy as LZ
 import qualified Data.ByteString.Builder as Builder
 import qualified Database.Redis as Redis
@@ -75,6 +78,13 @@ linkFork io = liftIO $ do
 		case result of
 			Left e -> throwTo mainThread e
 			Right () -> return ()
+
+jsonHandlerSafe :: (Aeson.FromJSON a) => HTTP.Response -> Streams.InputStream ByteString -> IO (Either String a)
+jsonHandlerSafe _ i = do
+	r <- Aeson.fromJSON <$> Streams.parseFromStream Aeson.json' i
+	case r of
+		(Aeson.Success a) ->  return (Right a)
+		(Aeson.Error str) ->  return (Left str)
 
 builderToStrict :: Builder.Builder -> ByteString
 builderToStrict = LZ.toStrict . Builder.toLazyByteString
