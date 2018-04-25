@@ -1,5 +1,6 @@
 import Prelude ()
 import BasicPrelude
+import System.IO (stdout, stderr, hSetBuffering, BufferMode(LineBuffering))
 import Data.Word (Word16)
 import Control.Concurrent.STM (atomically, TVar, newTVarIO, modifyTVar', TQueue, newTQueueIO)
 import UnexceptionalIO (syncIO)
@@ -119,6 +120,9 @@ startPing redis logthese limit isretry rawping
 
 main :: IO ()
 main = do
+	hSetBuffering stdout LineBuffering
+	hSetBuffering stderr LineBuffering
+
 	putStrLn $ s"Starting..."
 	redis <- Redis.checkedConnect =<< redisFromEnvOrDefault
 	limit <- newTVarIO 0
