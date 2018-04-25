@@ -1,5 +1,6 @@
 import Prelude ()
 import BasicPrelude
+import System.IO (stdout, stderr, hSetBuffering, BufferMode(LineBuffering))
 import Data.Word (Word16)
 import Control.Concurrent (throwTo, myThreadId)
 import Control.Concurrent.STM (atomically, TVar, newTVarIO, modifyTVar', TQueue, newTQueueIO)
@@ -44,16 +45,18 @@ verifyWithSubscriber callbackUri mode topic lease = exceptT (const $ return Fals
 			(encodeUtf8 $ s"hub.lease_seconds", Just $ encodeUtf8 $ tshow lease)
 		]
 
-subscribeOne :: Text -> URI -> Text -> Text -> Word16 -> Maybe ByteString -> Redis.Redis ()
-subscribeOne callback callbackUri topic ipns lease msecret = do
-	result <- liftIO $ runExceptT $ syncIO $ HTTP.get ipnsResolve HTTP.jsonHandler
+subscribeOne :: TQueue Text -> Text -> URI -> Text -> Text -> Word16 -> Maybe ByteString -> Redis.Redis ()
+subscribeOne logthese callback callbackUri topic ipns lease msecret = do
+	logPrint logthese "subscribeOne" (topic, callback, ipnsResolve)
 	result <- liftIO $ fmap join $ runExceptT $ fmapLT show $ syncIO $ HTTP.get ipnsResolve jsonHandlerSafe
+	logPrint logthese "subscribeOne::resolved" (result, topic, callback)
 	mpath <- liftIO $ case result of
 		Left _ -> exceptT (const $ return Nothing) (const $ return Nothing) $
 			syncIO $ HTTP.get denyCallback (const $ const $ return ())
 		Right (IPFSPath path) -> do
 			verified <- verifyWithSubscriber callbackUri ModeSubscribe topic lease
 			if verified then return (Just path) else return Nothing
+	logPrint logthese "subscribeOne::mpath" (mpath, topic, callback)
 	now <- liftIO $ realToFrac <$> liftIO getPOSIXTime
 	forM_ mpath $ \path -> do
 		redisOrFail_ $ Redis.zadd (encodeUtf8 ipns)
@@ -109,7 +112,7 @@ startVerify redis logthese limit rawverify
 			logPrint logthese "startVerify::forked" (mode, topic, callback)
 
 			case mode of
-				ModeSubscribe -> subscribeOne callback callbackUri topic ipns lease (maybeSecret secret)
+				ModeSubscribe -> subscribeOne logthese callback callbackUri topic ipns lease (maybeSecret secret)
 				ModeUnsubscribe -> unsubscribeOne callback callbackUri topic ipns
 
 			logPrint logthese "startVerify::done" (mode, topic, callback)
@@ -120,6 +123,9 @@ startVerify redis logthese limit rawverify
 
 main :: IO ()
 main = do
+	hSetBuffering stdout LineBuffering
+	hSetBuffering stderr LineBuffering
+
 	putStrLn $ s"Starting..."
 	redis <- Redis.checkedConnect =<< redisFromEnvOrDefault
 	limit <- newTVarIO 0
