@@ -8,6 +8,7 @@ import Network.URI (parseAbsoluteURI)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import qualified System.IO.Streams as Streams
 import qualified Network.Http.Client as HTTP
+import qualified Network.Http.Types as HTTP
 import qualified Crypto.MAC.HMAC as HMAC
 import qualified Crypto.Hash as HMAC
 import qualified Database.Redis as Redis
@@ -18,8 +19,9 @@ import Common
 concurrencyLimit :: Int
 concurrencyLimit = 100
 
-firePing :: TQueue Text -> Streams.InputStream ByteString -> Text -> Text -> Maybe ByteString -> IO Bool
-firePing _ instream ipfs callback msecret | Just uri <- parseAbsoluteURI (textToString callback) = do
+firePing :: TQueue Text -> HTTP.Response -> Streams.InputStream ByteString -> Text -> Text -> Maybe ByteString -> IO Bool
+firePing logthese response instream ipfs callback msecret | Just uri <- parseAbsoluteURI (textToString callback) = do
+	let mcontenttype = HTTP.lookupHeader (HTTP.getHeaders response) (encodeUtf8 $ s"Content-Type")
 	(stream, iomsig) <- case msecret of
 		Just secret -> second (fmap $ Just . HMAC.hmacGetDigest . HMAC.finalize) <$>
 			Streams.inputFoldM (return .: HMAC.update) (HMAC.initialize secret) instream
@@ -31,17 +33,19 @@ firePing _ instream ipfs callback msecret | Just uri <- parseAbsoluteURI (textTo
 			HTTP.http HTTP.POST (uriFullPath uri)
 			HTTP.setHeader (encodeUtf8 $ s"Link")
 				(encodeUtf8 $ s"<https://websub.ipfs.singpolyma.net/>; rel=\"hub\", <dweb:" ++ ipfs ++ s">; rel=\"self\"")
-			case msig of
-				Just sig -> HTTP.setHeader (encodeUtf8 $ s"X-Hub-Signature")
+			forM_ mcontenttype HTTP.setContentType
+			forM_ msig $ \sig ->
+				HTTP.setHeader (encodeUtf8 $ s"X-Hub-Signature")
 					(encodeUtf8 $ s"sha256=" ++ tshow (sig :: HMAC.Digest HMAC.SHA256))
-				Nothing -> return ()
+		logPrint logthese "firePing:request" (req, ipfs, callback)
 		HTTP.sendRequest conn req (HTTP.inputStreamBody stream)
-		HTTP.receiveResponse conn $ \response _ ->
+		HTTP.receiveResponse conn $ \response _ -> do
+			logPrint logthese "firePing:response" (response, ipfs, callback)
 			case HTTP.getStatusCode response of
 				410 -> return True -- Subscription deleted
 				code | code >= 200 && code <= 299 -> return True
 				_ -> return False
-firePing logthese _ _ callback _ = logPrint logthese "firePing:nouri" callback >> return False
+firePing logthese _ _ _ callback _ = logPrint logthese "firePing:nouri" callback >> return False
 
 pingOne :: (MonadIO m) => TQueue Text -> Text -> Text -> Maybe ByteString -> m Bool
 pingOne logthese ipfs callback secret = liftIO $ do
@@ -52,9 +56,9 @@ pingOne logthese ipfs callback secret = liftIO $ do
 			404 -> HTTP.get (encodeUtf8 $ s"http://127.0.0.1:5001/api/v0/dag/get?arg=" ++ ipfs) $ \dagresponse daginstream -> do
 				logPrint logthese "pingOne:5001" (HTTP.getStatusCode dagresponse, ipfs, callback)
 				case HTTP.getStatusCode dagresponse of
-					200 -> firePing logthese daginstream ipfs callback secret
+					200 -> firePing logthese dagresponse daginstream ipfs callback secret
 					_ -> return True
-			200 -> firePing logthese instream ipfs callback secret
+			200 -> firePing logthese response instream ipfs callback secret
 			_ -> return False
 
 	case result of
