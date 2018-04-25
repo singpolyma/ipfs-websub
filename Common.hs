@@ -2,7 +2,7 @@ module Common where
 
 import Prelude ()
 import BasicPrelude
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkFinally, myThreadId, throwTo)
 import System.Environment (lookupEnv)
 import Data.Time (getCurrentTime)
 import Control.Concurrent.STM (atomically, TQueue, TVar, readTVar, modifyTVar', retry, readTQueue, writeTQueue)
@@ -68,8 +68,13 @@ waitForThreads limit =
 		concurrency <- readTVar limit
 		when (concurrency > 0) retry
 
-safeFork :: (MonadIO m) => UIO () -> m ()
-safeFork = liftIO . void . forkIO . runUIO
+linkFork :: (MonadIO m) => IO () -> m ()
+linkFork io = liftIO $ do
+	mainThread <- myThreadId
+	void $ forkFinally io $ \result ->
+		case result of
+			Left e -> throwTo mainThread e
+			Right () -> return ()
 
 builderToStrict :: Builder.Builder -> ByteString
 builderToStrict = LZ.toStrict . Builder.toLazyByteString

@@ -104,8 +104,7 @@ startVerify redis logthese limit rawverify
 		logPrint logthese "startverify" (mode, topic, callback)
 		concurrencyUpOne concurrencyLimit limit
 		logPrint logthese "startVerify::forking" (mode, topic, callback)
-		mainThread <- myThreadId
-		safeFork $ exceptT (ignoreExceptions . throwTo mainThread) return $ syncIO $ Redis.runRedis redis $ do
+		linkFork $ Redis.runRedis redis $ do
 			logPrint logthese "startVerify::forked" (mode, topic, callback)
 
 			case mode of
@@ -124,7 +123,7 @@ main = do
 	redis <- Redis.checkedConnect =<< redisFromEnvOrDefault
 	limit <- newTVarIO 0
 	logthese <- newTQueueIO
-	safeFork $ logger logthese
+	linkFork $ logger logthese
 	Redis.runRedis redis $ do
 		leftovers <- redisOrFail $ Redis.lrange (encodeUtf8 $ s"verifying") 0 (-1)
 		liftIO $ forM_ leftovers $ startVerify redis logthese limit
