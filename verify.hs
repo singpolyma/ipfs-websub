@@ -22,20 +22,26 @@ import Common
 concurrencyLimit :: Int
 concurrencyLimit = 100
 
-verifyWithSubscriber :: (Unexceptional m, Monad m) => URI -> HubMode -> Text -> Word16 -> m Bool
-verifyWithSubscriber callbackUri mode topic lease = exceptT (const $ return False) return $ do
-	challenge <- syncIO $ getRandomBytes 50
+verifyWithSubscriber :: (Unexceptional m, Monad m) => TQueue Text -> URI -> HubMode -> Text -> Word16 -> m Bool
+verifyWithSubscriber logthese callbackUri mode topic lease = exceptT handleError return $ syncIO $ do
+	logPrint logthese "verifyWithSubscriber" (topic, callbackUri)
+	challenge <- getRandomBytes 50
 	let callback = encodeUtf8 $ tshow $ callbackUri {
 			uriQuery = textToString $ decodeUtf8 $
 				HTTP.renderQuery True ((encodeUtf8 $ s"hub.challenge", Just challenge):query)
 		}
-	syncIO $ HTTP.get callback $ \response instream -> do
+	logPrint logthese "verifyWithSubscriber" (topic, callback)
+	HTTP.get callback $ \response instream -> do
 		challenge2 <- Streams.readExactly 50 instream
+		logPrint logthese "verifyWithSubscriber" (challenge, challenge2, HTTP.getStatusCode response, topic, callbackUri)
 		case HTTP.getStatusCode response of
 			404 -> return False
 			status | status >= 200 && status <= 299 -> return $ challenge == challenge2
 			_ -> return False
 	where
+	handleError e = do
+		printExceptions $ syncIO $ logPrint logthese "verifyWithSubscriber" e
+		return False
 	query = HTTP.parseQuery (encodeUtf8 $ fromString $ uriQuery callbackUri) ++ [
 			(
 				encodeUtf8 $ s"hub.mode",
@@ -54,7 +60,7 @@ subscribeOne logthese callback callbackUri topic ipns lease msecret = do
 		Left _ -> exceptT (const $ return Nothing) (const $ return Nothing) $
 			syncIO $ HTTP.get denyCallback (const $ const $ return ())
 		Right (IPFSPath path) -> do
-			verified <- verifyWithSubscriber callbackUri ModeSubscribe topic lease
+			verified <- verifyWithSubscriber logthese callbackUri ModeSubscribe topic lease
 			if verified then return (Just path) else return Nothing
 	logPrint logthese "subscribeOne::mpath" (mpath, topic, callback)
 	now <- liftIO $ realToFrac <$> liftIO getPOSIXTime
@@ -83,9 +89,9 @@ subscribeOne logthese callback callbackUri topic ipns lease msecret = do
 			(encodeUtf8 $ s"hub.reason", Just $ encodeUtf8 $ s"Not a valid IPNS name.")
 		]
 
-unsubscribeOne :: Text -> URI -> Text -> Text -> Redis.Redis ()
-unsubscribeOne callback callbackUri topic ipns = do
-	verified <- liftIO $ verifyWithSubscriber callbackUri ModeUnsubscribe topic 0
+unsubscribeOne :: TQueue Text -> Text -> URI -> Text -> Text -> Redis.Redis ()
+unsubscribeOne logthese callback callbackUri topic ipns = do
+	verified <- liftIO $ verifyWithSubscriber logthese callbackUri ModeUnsubscribe topic 0
 	when verified $ redisOrFail_ $
 		Redis.zrem (encodeUtf8 ipns) [encodeUtf8 callback]
 
@@ -113,7 +119,7 @@ startVerify redis logthese limit rawverify
 
 			case mode of
 				ModeSubscribe -> subscribeOne logthese callback callbackUri topic ipns lease (maybeSecret secret)
-				ModeUnsubscribe -> unsubscribeOne callback callbackUri topic ipns
+				ModeUnsubscribe -> unsubscribeOne logthese callback callbackUri topic ipns
 
 			logPrint logthese "startVerify::done" (mode, topic, callback)
 			redisOrFail_ $ Redis.lrem (encodeUtf8 $ s"verifying") 1 rawverify
