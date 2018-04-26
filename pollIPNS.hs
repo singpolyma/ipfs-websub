@@ -69,8 +69,7 @@ scanLastResolvedTo redis limit cursor = do
 			concurrency <- readTVar limit
 			when (concurrency >= concurrencyLimit) retry
 			modifyTVar' limit (+1)
-		mainThread <- myThreadId
-		safeFork $ exceptT (ignoreExceptions . throwTo mainThread) return $ syncIO $ Redis.runRedis redis $
+		linkFork $ Redis.runRedis redis $
 			resolveOne limit ipns lastValue
 	if next == Redis.cursor0 then return () else
 		scanLastResolvedTo redis limit next
