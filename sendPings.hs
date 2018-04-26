@@ -1,5 +1,6 @@
 import Prelude ()
 import BasicPrelude
+import Data.Typeable (Proxy(Proxy), typeOf, typeRep)
 import System.IO (stdout, stderr, hSetBuffering, BufferMode(LineBuffering))
 import Data.Word (Word16)
 import Control.Concurrent.STM (atomically, TVar, newTVarIO, modifyTVar', TQueue, newTQueueIO)
@@ -7,6 +8,7 @@ import UnexceptionalIO (syncIO)
 import Network.URI (parseAbsoluteURI)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import qualified System.IO.Streams as Streams
+import qualified System.IO.Streams.ByteString as Streams
 import qualified Network.Http.Client as HTTP
 import qualified Network.Http.Types as HTTP
 import qualified Crypto.MAC.HMAC as HMAC
@@ -19,12 +21,22 @@ import Common
 concurrencyLimit :: Int
 concurrencyLimit = 100
 
+-- We can't do streaming when we need the HMAC
+-- But need to protect against a giant payload taking our RAM
+limitedStreamForce :: Streams.InputStream ByteString -> IO (Streams.InputStream ByteString)
+limitedStreamForce stream = do
+	stream' <- Streams.throwIfProducesMoreThan 100000 stream
+	Streams.fromList =<< Streams.toList stream'
+
 firePing :: TQueue Text -> HTTP.Response -> Streams.InputStream ByteString -> Text -> Text -> Maybe ByteString -> IO Bool
 firePing logthese response instream ipfs callback msecret | Just uri <- parseAbsoluteURI (textToString callback) = do
 	let mcontenttype = HTTP.lookupHeader (HTTP.getHeaders response) (encodeUtf8 $ s"Content-Type")
 	(stream, iomsig) <- case msecret of
-		Just secret -> second (fmap $ Just . HMAC.hmacGetDigest . HMAC.finalize) <$>
-			Streams.inputFoldM (return .: HMAC.update) (HMAC.initialize secret) instream
+		Just secret -> do
+			(stream, iomsig) <- second (fmap $ Just . HMAC.hmacGetDigest . HMAC.finalize) <$>
+				Streams.inputFoldM (return .: HMAC.update) (HMAC.initialize secret) instream
+			limitedStream <- limitedStreamForce stream
+			return (limitedStream, iomsig)
 		Nothing -> return (instream, return Nothing)
 	msig <- iomsig
 
@@ -62,6 +74,8 @@ pingOne logthese ipfs callback secret = liftIO $ do
 			_ -> return False
 
 	case result of
+		Left e | typeOf e == typeRep (Proxy :: Proxy Streams.TooManyBytesReadException) ->
+			logPrint logthese "pingOne:too big for HMAC" (ipfs, callback) >> return True
 		Left _ -> logPrint logthese "pingOne:fatal" (result, ipfs, callback) >> return False
 		Right False -> logPrint logthese "pingOne:failed" (result, ipfs, callback) >> return False
 		Right True -> logPrint logthese "pingOne:success" (ipfs, callback) >> return True
