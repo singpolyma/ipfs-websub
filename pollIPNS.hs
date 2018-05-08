@@ -64,7 +64,7 @@ scanLastResolvedTo redis limit cursor = do
 			concurrency <- readTVar limit
 			when (concurrency >= concurrencyLimit) retry
 			modifyTVar' limit (+1)
-		linkFork $ Redis.runRedis redis $
+		UIO.fork $ bailOnExceptions $ runRedis redis $
 			resolveOne limit ipns lastValue
 	if next == Redis.cursor0 then return () else
 		scanLastResolvedTo redis limit next

@@ -115,7 +115,7 @@ startPing redis logthese limit isretry rawping
 		logPrint logthese "startPing" (ipfs, callback)
 		concurrencyUpOne concurrencyLimit limit
 		logPrint logthese "startPing::forking" (ipfs, callback)
-		linkFork $ Redis.runRedis redis $ do
+		void $ UIO.fork $ bailOnExceptions $ runRedis redis $ do
 			logPrint logthese "startPing::forked" (ipfs, callback)
 			secret <- redisOrFail $ Redis.get $ builderToStrict $ concat $ map LazyCBOR.text [s"secret", callback, ipns]
 			success <- pingOne logthese ipfs callback secret
@@ -144,7 +144,7 @@ main = do
 	redis <- Redis.checkedConnect =<< redisFromEnvOrDefault
 	limit <- newTVarIO 0
 	logthese <- newTQueueIO
-	linkFork $ logger logthese
+	void $ UIO.fork $ logger logthese
 	Redis.runRedis redis $ do
 		leftovers <- redisOrFail $ Redis.lrange (encodeUtf8 $ s"pinging") 0 (-1)
 		liftIO $ forM_ leftovers $ startPing redis logthese limit False

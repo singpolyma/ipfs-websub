@@ -4,6 +4,7 @@ import Prelude ()
 import BasicPrelude
 import Control.Concurrent (forkFinally, myThreadId, throwTo)
 import System.Environment (lookupEnv)
+import System.Exit (die)
 import Data.Time (getCurrentTime)
 import Control.Concurrent.STM (atomically, TQueue, TVar, readTVar, modifyTVar', retry, readTQueue, writeTQueue)
 import Network.URI (URI(..))
@@ -38,6 +39,9 @@ logger logthese = forever $ printExceptions $ UIO.fromIO $ do
 	logthis <- atomically $ readTQueue logthese
 	putStrLn logthis
 
+bailOnExceptions :: (Show e, Unexceptional m) => m (Either e ()) -> m ()
+bailOnExceptions = (either (ignoreExceptions . die . show) return =<<)
+
 printExceptions :: (Show e, Unexceptional m) => m (Either e ()) -> m ()
 printExceptions = (either (ignoreExceptions . print) return =<<)
 
@@ -57,6 +61,9 @@ redisOrFail x = join $ either (fail . show) return <$> x
 redisOrFail_ :: Redis.Redis (Either Redis.Reply a) -> Redis.Redis ()
 redisOrFail_ x = join $ either (fail . show) (const $ return ()) <$> x
 
+runRedis :: (Unexceptional m) => Redis.Connection -> Redis.Redis () -> m (Either UIO.SomeNonPseudoException ())
+runRedis conn action = UIO.fromIO (Redis.runRedis conn action)
+
 concurrencyUpOne :: (MonadIO m) => Int -> TVar Int -> m ()
 concurrencyUpOne concurrencyLimit limit =
 	liftIO $ atomically $ do
@@ -69,14 +76,6 @@ waitForThreads limit =
 	liftIO $ atomically $ do
 		concurrency <- readTVar limit
 		when (concurrency > 0) retry
-
-linkFork :: (MonadIO m) => IO () -> m ()
-linkFork io = liftIO $ do
-	mainThread <- myThreadId
-	void $ forkFinally io $ \result ->
-		case result of
-			Left e -> throwTo mainThread e
-			Right () -> return ()
 
 jsonHandlerSafe :: (Aeson.FromJSON a) => HTTP.Response -> Streams.InputStream ByteString -> IO (Either String a)
 jsonHandlerSafe _ i = do
