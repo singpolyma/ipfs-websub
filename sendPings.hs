@@ -4,11 +4,10 @@ import Data.Typeable (Proxy(Proxy), typeOf, typeRep)
 import System.IO (stdout, stderr, hSetBuffering, BufferMode(LineBuffering))
 import Data.Word (Word16)
 import Control.Concurrent.STM (atomically, TVar, newTVarIO, modifyTVar', TQueue, newTQueueIO)
-import UnexceptionalIO (syncIO)
+import qualified UnexceptionalIO as UIO
 import Network.URI (parseAbsoluteURI)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import qualified System.IO.Streams as Streams
-import qualified System.IO.Streams.ByteString as Streams
 import qualified Network.Http.Client as HTTP
 import qualified Network.Http.Types as HTTP
 import qualified Crypto.MAC.HMAC as HMAC
@@ -62,7 +61,7 @@ firePing logthese _ _ _ callback _ = logPrint logthese "firePing:nouri" callback
 pingOne :: (MonadIO m) => TQueue Text -> Text -> Text -> Maybe ByteString -> m Bool
 pingOne logthese ipfs callback secret = liftIO $ do
 	logPrint logthese "pingOne" (ipfs, callback)
-	result <- liftIO $ syncIO $ HTTP.get (encodeUtf8 $ s"http://127.0.0.1:8080" ++ ipfs) $ \response instream -> do
+	result <- liftIO $ UIO.fromIO $ HTTP.get (encodeUtf8 $ s"http://127.0.0.1:8080" ++ ipfs) $ \response instream -> do
 		logPrint logthese "pingOne:8080" (HTTP.getStatusCode response, ipfs, callback)
 		case HTTP.getStatusCode response of
 			404 -> HTTP.get (encodeUtf8 $ s"http://127.0.0.1:5001/api/v0/dag/get?arg=" ++ ipfs) $ \dagresponse daginstream -> do

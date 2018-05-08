@@ -7,8 +7,7 @@ import System.Environment (lookupEnv)
 import Data.Time (getCurrentTime)
 import Control.Concurrent.STM (atomically, TQueue, TVar, readTVar, modifyTVar', retry, readTQueue, writeTQueue)
 import Network.URI (URI(..))
-import Control.Error (syncIO, exceptT, ExceptT)
-import UnexceptionalIO (Unexceptional, UIO, runUIO, liftUIO)
+import UnexceptionalIO (Unexceptional)
 import qualified UnexceptionalIO as UIO
 import qualified Data.Aeson as Aeson
 import qualified System.IO.Streams as Streams
@@ -34,16 +33,16 @@ logPrint logthese tag x = liftIO $ do
 	atomically $ writeTQueue logthese $
 		tshow time ++ s" :: " ++ fromString tag ++ s" :: " ++ tshow x
 
-logger :: (Unexceptional m, Monad m) => TQueue Text -> m ()
-logger logthese = forever $ printExceptions $ syncIO $ do
+logger :: (Unexceptional m) => TQueue Text -> m ()
+logger logthese = forever $ printExceptions $ UIO.fromIO $ do
 	logthis <- atomically $ readTQueue logthese
 	putStrLn logthis
 
-printExceptions :: (Show e, Unexceptional m, Monad m) => ExceptT e m () -> m ()
-printExceptions = exceptT (ignoreExceptions . print) return
+printExceptions :: (Show e, Unexceptional m) => m (Either e ()) -> m ()
+printExceptions = (either (ignoreExceptions . print) return =<<)
 
 ignoreExceptions :: (Unexceptional m) => IO () -> m ()
-ignoreExceptions = liftUIO . void . UIO.fromIO
+ignoreExceptions = UIO.lift . void . UIO.fromIO
 
 uriFullPath :: URI -> ByteString
 uriFullPath u = case url of

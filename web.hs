@@ -1,9 +1,10 @@
 import Prelude ()
 import BasicPrelude
 import Data.Word (Word16)
-import Control.Error (runExceptT, exceptT, throwE, (??), readZ, syncIO)
+import Control.Error (runExceptT, exceptT, throwE, (??), readZ)
 import Network.URI (parseURIReference, URI(..), URIAuth(..))
 import Data.Bool.HT (select)
+import qualified UnexceptionalIO as UIO
 import qualified Data.Text as T
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai as Wai
@@ -53,7 +54,7 @@ app redis req = (>>=) $ exceptT (Wai.string HTTP.badRequest400 [] . (++"\n")) re
 	let secret = map LazyCBOR.byteString $ maybeToList $
 		lookup (encodeUtf8 $ s"hub.secret") params
 
-	redisResult <- liftIO $ runExceptT $ syncIO $ Redis.runRedis redis $ redisOrFail_ $
+	redisResult <- liftIO $ UIO.fromIO $ Redis.runRedis redis $ redisOrFail_ $
 		Redis.lpush (encodeUtf8 $ s"to_verify") [
 			builderToStrict $ concat $ [
 				LazyCBOR.word16 $ fromIntegral $ fromEnum mode,

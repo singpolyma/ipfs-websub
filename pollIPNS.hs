@@ -2,12 +2,9 @@ module Main (main) where
 
 import Prelude ()
 import BasicPrelude
-import Control.Concurrent (throwTo, myThreadId)
 import Control.Concurrent.STM (atomically, retry, TVar, newTVarIO, readTVar, modifyTVar')
-import Control.Error (hush, exceptT, syncIO)
+import Control.Error (hush)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Network.URI (parseURI)
-import Network.BufferType (BufferType)
 import qualified Data.Aeson as Aeson
 import qualified Network.Http.Client as HTTP
 import qualified Network.HTTP.Types as HTTP
@@ -37,11 +34,11 @@ urlEncode = HTTP.urlEncode False . encodeUtf8
 resolveOne :: TVar Int -> ByteString -> ByteString -> Redis.Redis ()
 resolveOne limit ipns lastPath = do
 	now <- realToFrac <$> liftIO getPOSIXTime
-	resolvedIPNS <- liftIO $ fmap hush $ UIO.syncIO $ HTTP.get (encodeUtf8 (s"http://127.0.0.1:5001/api/v0/name/resolve?r&arg=") ++ HTTP.urlEncode False ipns) HTTP.jsonHandler
+	resolvedIPNS <- liftIO $ fmap hush $ UIO.fromIO $ HTTP.get (encodeUtf8 (s"http://127.0.0.1:5001/api/v0/name/resolve?r&arg=") ++ HTTP.urlEncode False ipns) HTTP.jsonHandler
 	forM_ resolvedIPNS $ \(IPFSPath currentPath) ->
 		let lastPathT = decodeUtf8 lastPath in
 		if lastPathT == currentPath then return () else do
-			diffr <- liftIO $ fmap hush $ UIO.syncIO $ HTTP.get (
+			diffr <- liftIO $ fmap hush $ UIO.fromIO $ HTTP.get (
 					encodeUtf8 (s"http://127.0.0.1:5001/api/v0/object/diff?arg=") ++ urlEncode lastPathT ++
 					encodeUtf8 (s"&arg=") ++ urlEncode currentPath
 				) HTTP.jsonHandler
@@ -57,8 +54,6 @@ resolveOne limit ipns lastPath = do
 					)
 			void $ Redis.hset (encodeUtf8 $ s"last_resolved_to") ipns (encodeUtf8 currentPath)
 	liftIO $ atomically $ modifyTVar' limit (subtract 1)
-	where
-	ipnsS = textToString $ decodeUtf8 ipns
 
 scanLastResolvedTo :: Redis.Connection -> TVar Int -> Redis.Cursor -> Redis.Redis ()
 scanLastResolvedTo redis limit cursor = do

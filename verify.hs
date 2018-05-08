@@ -2,9 +2,8 @@ import Prelude ()
 import BasicPrelude
 import System.IO (stdout, stderr, hSetBuffering, BufferMode(LineBuffering))
 import Data.Word (Word16)
-import Control.Concurrent (throwTo, myThreadId)
 import Control.Concurrent.STM (atomically, TVar, newTVarIO, modifyTVar', TQueue, newTQueueIO)
-import Control.Error (exceptT, runExceptT, syncIO, fmapLT)
+import Control.Error (fmapL)
 import Safe (toEnumMay)
 import Network.URI (URI(..), parseAbsoluteURI)
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -14,6 +13,7 @@ import qualified System.IO.Streams as Streams
 import qualified Network.Http.Client as HTTP
 import qualified Network.HTTP.Types as HTTP
 import UnexceptionalIO (Unexceptional)
+import qualified UnexceptionalIO as UIO
 import qualified Database.Redis as Redis
 
 import qualified LazyCBOR
@@ -22,8 +22,8 @@ import Common
 concurrencyLimit :: Int
 concurrencyLimit = 100
 
-verifyWithSubscriber :: (Unexceptional m, Monad m) => TQueue Text -> URI -> HubMode -> Text -> Word16 -> m Bool
-verifyWithSubscriber logthese callbackUri mode topic lease = exceptT handleError return $ syncIO $ do
+verifyWithSubscriber :: (Unexceptional m) => TQueue Text -> URI -> HubMode -> Text -> Word16 -> m Bool
+verifyWithSubscriber logthese callbackUri mode topic lease = (either handleError return =<<) $ UIO.fromIO $ do
 	logPrint logthese "verifyWithSubscriber" (topic, callbackUri)
 	challenge <- getRandomBytes 50
 	let callback = encodeUtf8 $ tshow $ callbackUri {
@@ -40,7 +40,7 @@ verifyWithSubscriber logthese callbackUri mode topic lease = exceptT handleError
 			_ -> return False
 	where
 	handleError e = do
-		printExceptions $ syncIO $ logPrint logthese "verifyWithSubscriber" e
+		printExceptions $ UIO.fromIO $ logPrint logthese "verifyWithSubscriber" e
 		return False
 	query = HTTP.parseQuery (encodeUtf8 $ fromString $ uriQuery callbackUri) ++ [
 			(
@@ -54,11 +54,11 @@ verifyWithSubscriber logthese callbackUri mode topic lease = exceptT handleError
 subscribeOne :: TQueue Text -> Text -> URI -> Text -> Text -> Word16 -> Maybe ByteString -> Redis.Redis ()
 subscribeOne logthese callback callbackUri topic ipns lease msecret = do
 	logPrint logthese "subscribeOne" (topic, callback, ipnsResolve)
-	result <- liftIO $ fmap join $ runExceptT $ fmapLT show $ syncIO $ HTTP.get ipnsResolve jsonHandlerSafe
+	result <- liftIO $ fmap join $ (fmap.fmapL) show $ UIO.fromIO $ HTTP.get ipnsResolve jsonHandlerSafe
 	logPrint logthese "subscribeOne::resolved" (result, topic, callback)
 	mpath <- liftIO $ case result of
-		Left _ -> exceptT (const $ return Nothing) (const $ return Nothing) $
-			syncIO $ HTTP.get denyCallback (const $ const $ return ())
+		Left _ -> (either (const $ return Nothing) (const $ return Nothing) =<<) $
+			UIO.fromIO $ HTTP.get denyCallback (const $ const $ return ())
 		Right (IPFSPath path) -> do
 			verified <- verifyWithSubscriber logthese callbackUri ModeSubscribe topic lease
 			if verified then return (Just path) else return Nothing

@@ -55,7 +55,7 @@ parseConnectInfo url = do
 		_ -> Left "Invalid scheme"
 
 parseUnixScheme :: URI -> Either String ConnectInfo
-parseUnixScheme uri = do
+parseUnixScheme uri =
 	return defaultConnectInfo
 		{ connectHost = ""
 		, connectPort = UnixSocket path
